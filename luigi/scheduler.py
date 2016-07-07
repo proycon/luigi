@@ -804,9 +804,11 @@ class CentralPlannerScheduler(Scheduler):
             greedy_workers = dict((worker.id, worker.info.get('workers', 1))
                                   for worker in active_workers)
 
-        tasks = list(relevant_tasks)
 
-        if not self._config.fast_scheduling:
+        if self._config.fast_scheduling:
+            tasks = relevant_tasks
+        else:
+            tasks = list(relevant_tasks)
             tasks.sort(key=self._rank, reverse=True)
 
         for task in tasks:
