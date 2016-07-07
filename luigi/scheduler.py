@@ -135,6 +135,10 @@ class scheduler(Config):
 
     prune_on_get_work = parameter.BoolParameter(default=False)
 
+    prune_interval = parameter.IntParameter(default=0, description="Prune interval in seconds when prune_on_get_work is enabled (0=disabled)")
+
+    fast_scheduling = parameter.BoolParameter(default=False,  description="Ignores priorities, resources and schedules tasks more arbitrarily, i.e. not necessarily in the order they were added. This speeds up scheduling and allows for scaling to a higher number of tasks")
+
 
 class Failures(object):
     """
@@ -321,6 +325,7 @@ class SimpleTaskState(object):
         self._tasks = {}  # map from id to a Task object
         self._status_tasks = collections.defaultdict(dict)
         self._active_workers = {}  # map from id to a Worker object
+        self._last_prune = 0 #Used when prune_on_get_work is True
 
     def get_state(self):
         return self._tasks, self._active_workers
@@ -546,6 +551,8 @@ class CentralPlannerScheduler(Scheduler):
             disable_hard_timeout=self._config.disable_hard_timeout,
             disable_window=self._config.disable_window)
         self._worker_requests = {}
+        if self._config.fast_scheduling and not self._config.prune_interval:
+            self._config.prune_interval = 60
 
     def load(self):
         self._state.load()
@@ -759,8 +766,9 @@ class CentralPlannerScheduler(Scheduler):
         # TODO: remove tasks that can't be done, figure out if the worker has absolutely
         # nothing it can wait for
 
-        if self._config.prune_on_get_work:
+        if self._config.prune_on_get_work and (self._config.prune_interval == 0 or time.time() - self._state._last_prune >= self._config.prune_interval):
             self.prune()
+            self._state._last_prune = time.time()
 
         assert worker is not None
         worker_id = worker
@@ -784,7 +792,7 @@ class CentralPlannerScheduler(Scheduler):
         n_unique_pending = 0
 
         worker = self._state.get_worker(worker_id)
-        if worker.is_trivial_worker(self._state):
+        if self._config.fast_scheduling or worker.is_trivial_worker(self._state):
             relevant_tasks = worker.get_pending_tasks(self._state)
             used_resources = collections.defaultdict(int)
             greedy_workers = dict()  # If there's no resources, then they can grab any task
@@ -795,8 +803,11 @@ class CentralPlannerScheduler(Scheduler):
             active_workers = self._state.get_active_workers(last_get_work_gt=activity_limit)
             greedy_workers = dict((worker.id, worker.info.get('workers', 1))
                                   for worker in active_workers)
+
         tasks = list(relevant_tasks)
-        tasks.sort(key=self._rank, reverse=True)
+
+        if not self._config.fast_scheduling:
+            tasks.sort(key=self._rank, reverse=True)
 
         for task in tasks:
             in_workers = (assistant and getattr(task, 'runnable', bool(task.workers))) or worker_id in task.workers
@@ -817,7 +828,10 @@ class CentralPlannerScheduler(Scheduler):
                         n_unique_pending += 1
 
             if best_task:
-                continue
+                if self._config.fast_scheduling and n_unique_pending >= 1:
+                    break
+                else:
+                    continue
 
             if task.status == RUNNING and (task.worker_running in greedy_workers):
                 greedy_workers[task.worker_running] -= 1
