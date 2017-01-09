@@ -30,7 +30,7 @@ class ExecutionSummaryTest(LuigiTestCase):
 
     def setUp(self):
         super(ExecutionSummaryTest, self).setUp()
-        self.scheduler = luigi.scheduler.CentralPlannerScheduler(prune_on_get_work=False)
+        self.scheduler = luigi.scheduler.Scheduler(prune_on_get_work=False)
         self.worker = luigi.worker.Worker(scheduler=self.scheduler)
 
     def run_task(self, task):
@@ -95,6 +95,59 @@ class ExecutionSummaryTest(LuigiTestCase):
         for i, line in enumerate(result):
             self.assertEqual(line, expected[i])
 
+    def test_batch_complete(self):
+        ran_tasks = set()
+
+        class MaxBatchTask(luigi.Task):
+            param = luigi.IntParameter(batch_method=max)
+
+            def run(self):
+                ran_tasks.add(self.param)
+
+            def complete(self):
+                return any(self.param <= ran_param for ran_param in ran_tasks)
+
+        class MaxBatches(luigi.WrapperTask):
+            def requires(self):
+                return map(MaxBatchTask, range(5))
+
+        self.run_task(MaxBatches())
+        d = self.summary_dict()
+        expected_completed = {
+            MaxBatchTask(0),
+            MaxBatchTask(1),
+            MaxBatchTask(2),
+            MaxBatchTask(3),
+            MaxBatchTask(4),
+            MaxBatches(),
+        }
+        self.assertEqual(expected_completed, d['completed'])
+
+    def test_batch_fail(self):
+        class MaxBatchFailTask(luigi.Task):
+            param = luigi.IntParameter(batch_method=max)
+
+            def run(self):
+                assert self.param < 4
+
+            def complete(self):
+                return False
+
+        class MaxBatches(luigi.WrapperTask):
+            def requires(self):
+                return map(MaxBatchFailTask, range(5))
+
+        self.run_task(MaxBatches())
+        d = self.summary_dict()
+        expected_failed = {
+            MaxBatchFailTask(0),
+            MaxBatchFailTask(1),
+            MaxBatchFailTask(2),
+            MaxBatchFailTask(3),
+            MaxBatchFailTask(4),
+        }
+        self.assertEqual(expected_failed, d['failed'])
+
     def test_check_complete_error(self):
         class Bar(luigi.Task):
             def run(self):
@@ -113,7 +166,7 @@ class ExecutionSummaryTest(LuigiTestCase):
         self.assertEqual({Foo()}, d['still_pending_not_ext'])
         self.assertEqual({Foo()}, d['upstream_scheduling_error'])
         self.assertEqual({Bar()}, d['scheduling_error'])
-        self.assertFalse(d['unknown_reason'])
+        self.assertFalse(d['not_run'])
         self.assertFalse(d['already_done'])
         self.assertFalse(d['completed'])
         self.assertFalse(d['failed'])
@@ -126,14 +179,62 @@ class ExecutionSummaryTest(LuigiTestCase):
                     '===== Luigi Execution Summary =====',
                     '',
                     'Scheduled 2 tasks of which:',
-                    '* 1 failed running complete() or requires():',
+                    '* 1 failed scheduling:',
                     '    - 1 Bar()',
                     '* 1 were left pending, among these:',
-                    "    * 1 had dependencies whose complete() or requires() failed:",
+                    "    * 1 had dependencies whose scheduling failed:",
                     '        - 1 Foo()',
                     '',
                     'Did not run any tasks',
-                    'This progress looks :( because there were tasks whose complete() or requires() failed',
+                    'This progress looks :( because there were tasks whose scheduling failed',
+                    '',
+                    '===== Luigi Execution Summary =====',
+                    '']
+        result = summary.split('\n')
+        self.assertEqual(len(result), len(expected))
+        for i, line in enumerate(result):
+            self.assertEqual(line, expected[i])
+
+    def test_not_run_error(self):
+        class Bar(luigi.Task):
+            def complete(self):
+                return True
+
+        class Foo(luigi.Task):
+            def requires(self):
+                yield Bar()
+
+        def new_func(*args, **kwargs):
+            return None
+
+        with mock.patch('luigi.scheduler.Scheduler.add_task', new_func):
+            self.run_task(Foo())
+
+        d = self.summary_dict()
+        self.assertEqual({Foo()}, d['still_pending_not_ext'])
+        self.assertEqual({Foo()}, d['not_run'])
+        self.assertEqual({Bar()}, d['already_done'])
+        self.assertFalse(d['upstream_scheduling_error'])
+        self.assertFalse(d['scheduling_error'])
+        self.assertFalse(d['completed'])
+        self.assertFalse(d['failed'])
+        self.assertFalse(d['upstream_failure'])
+        self.assertFalse(d['upstream_missing_dependency'])
+        self.assertFalse(d['run_by_other_worker'])
+        self.assertFalse(d['still_pending_ext'])
+        summary = self.summary()
+        expected = ['',
+                    '===== Luigi Execution Summary =====',
+                    '',
+                    'Scheduled 2 tasks of which:',
+                    '* 1 present dependencies were encountered:',
+                    '    - 1 Bar()',
+                    '* 1 were left pending, among these:',
+                    "    * 1 was not granted run permission by the scheduler:",
+                    '        - 1 Foo()',
+                    '',
+                    'Did not run any tasks',
+                    'This progress looks :| because there were tasks that were not granted run permission by the scheduler',
                     '',
                     '===== Luigi Execution Summary =====',
                     '']
@@ -159,7 +260,7 @@ class ExecutionSummaryTest(LuigiTestCase):
         d = self.summary_dict()
         self.assertEqual({Foo()}, d['scheduling_error'])
         self.assertFalse(d['upstream_scheduling_error'])
-        self.assertFalse(d['unknown_reason'])
+        self.assertFalse(d['not_run'])
         self.assertFalse(d['already_done'])
         self.assertFalse(d['completed'])
         self.assertFalse(d['failed'])
@@ -172,11 +273,11 @@ class ExecutionSummaryTest(LuigiTestCase):
                     '===== Luigi Execution Summary =====',
                     '',
                     'Scheduled 1 tasks of which:',
-                    '* 1 failed running complete() or requires():',
+                    '* 1 failed scheduling:',
                     '    - 1 Foo()',
                     '',
                     'Did not run any tasks',
-                    'This progress looks :( because there were tasks whose complete() or requires() failed',
+                    'This progress looks :( because there were tasks whose scheduling failed',
                     '',
                     '===== Luigi Execution Summary =====',
                     '']
@@ -337,7 +438,7 @@ class ExecutionSummaryTest(LuigiTestCase):
 
         other_worker = luigi.worker.Worker(scheduler=self.scheduler, worker_id="other_worker")
         other_worker.add(AlreadyRunningTask())  # This also registers this worker
-        old_func = luigi.scheduler.CentralPlannerScheduler.get_work
+        old_func = luigi.scheduler.Scheduler.get_work
 
         def new_func(*args, **kwargs):
             new_kwargs = kwargs.copy()
@@ -345,42 +446,42 @@ class ExecutionSummaryTest(LuigiTestCase):
             old_func(*args, **new_kwargs)
             return old_func(*args, **kwargs)
 
-        with mock.patch('luigi.scheduler.CentralPlannerScheduler.get_work', new_func):
+        with mock.patch('luigi.scheduler.Scheduler.get_work', new_func):
             self.run_task(AlreadyRunningTask())
 
         d = self.summary_dict()
         self.assertFalse(d['already_done'])
         self.assertFalse(d['completed'])
-        self.assertFalse(d['unknown_reason'])
+        self.assertFalse(d['not_run'])
         self.assertEqual({AlreadyRunningTask()}, d['run_by_other_worker'])
 
-    def test_unknown_reason(self):
+    def test_not_run(self):
         class AlreadyRunningTask(luigi.Task):
             def run(self):
                 pass
 
         other_worker = luigi.worker.Worker(scheduler=self.scheduler, worker_id="other_worker")
         other_worker.add(AlreadyRunningTask())  # This also registers this worker
-        old_func = luigi.scheduler.CentralPlannerScheduler.get_work
+        old_func = luigi.scheduler.Scheduler.get_work
 
         def new_func(*args, **kwargs):
             kwargs['current_tasks'] = None
             old_func(*args, **kwargs)
             return old_func(*args, **kwargs)
 
-        with mock.patch('luigi.scheduler.CentralPlannerScheduler.get_work', new_func):
+        with mock.patch('luigi.scheduler.Scheduler.get_work', new_func):
             self.run_task(AlreadyRunningTask())
 
         d = self.summary_dict()
         self.assertFalse(d['already_done'])
         self.assertFalse(d['completed'])
         self.assertFalse(d['run_by_other_worker'])
-        self.assertEqual({AlreadyRunningTask()}, d['unknown_reason'])
+        self.assertEqual({AlreadyRunningTask()}, d['not_run'])
 
         s = self.summary()
         self.assertIn('\nScheduled 1 tasks of which:\n'
                       '* 1 were left pending, among these:\n'
-                      '    * 1 were left pending because of unknown reason:\n'
+                      '    * 1 was not granted run permission by the scheduler:\n'
                       '        - 1 AlreadyRunningTask()\n', s)
         self.assertNotIn('\n\n\n', s)
 
@@ -399,7 +500,7 @@ class ExecutionSummaryTest(LuigiTestCase):
         self.assertFalse(d['already_done'])
         self.assertFalse(d['completed'])
         self.assertFalse(d['run_by_other_worker'])
-        self.assertEqual({SomeTask()}, d['unknown_reason'])
+        self.assertEqual({SomeTask()}, d['not_run'])
 
     def test_somebody_else_disables_task(self):
         class SomeTask(luigi.Task):
@@ -420,7 +521,7 @@ class ExecutionSummaryTest(LuigiTestCase):
         self.assertFalse(d['already_done'])
         self.assertFalse(d['completed'])
         self.assertFalse(d['run_by_other_worker'])
-        self.assertEqual({SomeTask()}, d['unknown_reason'])
+        self.assertEqual({SomeTask()}, d['not_run'])
 
     def test_larger_tree(self):
 
@@ -985,3 +1086,34 @@ class ExecutionSummaryTest(LuigiTestCase):
         self.assertIn('Luigi Execution Summary', s)
         self.assertNotIn('00:00:00', s)
         self.assertNotIn('\n\n\n', s)
+
+    """
+    Test that a task once crashing and then succeeding should be counted as no failure.
+    """
+    def test_status_with_task_retry(self):
+        class Foo(luigi.Task):
+            run_count = 0
+
+            def run(self):
+                self.run_count += 1
+                if self.run_count == 1:
+                    raise ValueError()
+
+            def complete(self):
+                return self.run_count > 0
+
+        self.run_task(Foo())
+        self.run_task(Foo())
+        d = self.summary_dict()
+        self.assertEqual({Foo()}, d['completed'])
+        self.assertEqual({Foo()}, d['ever_failed'])
+        self.assertFalse(d['failed'])
+        self.assertFalse(d['upstream_failure'])
+        self.assertFalse(d['upstream_missing_dependency'])
+        self.assertFalse(d['run_by_other_worker'])
+        self.assertFalse(d['still_pending_ext'])
+        s = self.summary()
+        self.assertIn('Scheduled 1 task', s)
+        self.assertIn('Luigi Execution Summary', s)
+        self.assertNotIn('ever failed', s)
+        self.assertIn('\n\nThis progress looks :) because there were failed tasks but they all suceeded in a retry', s)

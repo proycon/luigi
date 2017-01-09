@@ -64,6 +64,7 @@ def _warn_node(self, msg, node, *args, **kwargs):
     if not msg.startswith('nonlocal image URI found:'):
         self._warnfunc(msg, '%s:%s' % get_source_line(node), *args, **kwargs)
 
+
 sphinx.environment.BuildEnvironment.warn_node = _warn_node
 
 if os.environ.get('READTHEDOCS', None) == 'True':
@@ -82,7 +83,7 @@ autoclass_content = 'both'
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
-#needs_sphinx = '1.0'
+needs_sphinx = '1.4.4'  # Value mirrored in doc/conf.py
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom

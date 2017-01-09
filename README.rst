@@ -11,7 +11,7 @@
 .. image:: https://landscape.io/github/spotify/luigi/master/landscape.svg?style=flat
    :target: https://landscape.io/github/spotify/luigi/master
 
-.. image:: https://img.shields.io/pypi/dm/luigi.svg?style=flat
+.. image:: https://img.shields.io/pypi/v/luigi.svg?style=flat
    :target: https://pypi.python.org/pypi/luigi
 
 .. image:: https://img.shields.io/pypi/l/luigi.svg?style=flat
@@ -143,6 +143,8 @@ or held presentations about Luigi:
 * `Dow Jones / The Wall Street Journal <http://wsj.com>`_
 * `Hotels.com <https://hotels.com>`_
 * `Custobar (Metrics Monday Helsinki) <http://www.slideshare.net/teemukurppa/managing-data-workflows-with-luigi>`_
+* `Blendle <http://www.anneschuth.nl/wp-content/uploads/sea-anneschuth-streamingblendle.pdf#page=126>`_
+* `TrustYou (PyData Berlin 2015) <https://speakerdeck.com/mfcabrera/pydata-berlin-2015-processing-hotel-reviews-with-python>`_
 
 We're more than happy to have your company added here. Just send a PR on GitHub.
 

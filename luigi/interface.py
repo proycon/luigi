@@ -131,7 +131,7 @@ class core(task.Config):
 class _WorkerSchedulerFactory(object):
 
     def create_local_scheduler(self):
-        return scheduler.CentralPlannerScheduler(prune_on_get_work=True, record_task_history=False)
+        return scheduler.Scheduler(prune_on_get_work=True, record_task_history=False)
 
     def create_remote_scheduler(self, url):
         return rpc.RemoteScheduler(url)
@@ -193,8 +193,7 @@ def _schedule_and_run(tasks, worker_scheduler_factory=None, override_defaults=No
         for t in tasks:
             success &= worker.add(t, env_params.parallel_scheduling)
         logger.info('Done scheduling tasks')
-        if env_params.workers != 0:
-            success &= worker.run()
+        success &= worker.run()
     logger.info(execution_summary.summary(worker))
     return dict(success=success, worker=worker)
 
